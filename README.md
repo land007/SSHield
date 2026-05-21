@@ -81,12 +81,47 @@ cd SSHield
 # 安装前端依赖
 npm install
 
-# 开发模式（热重载）
-npm run tauri dev
+# 前端开发服务
+npm run dev
 
-# 构建发布版本
-npm run tauri build
+# Tauri 桌面开发模式
+npm run tauri:dev
+
+# 构建前端
+npm run build
+
+# 构建桌面安装包
+npm run tauri:build
 ```
+
+---
+
+## GitHub Actions 自动打包
+
+`.github/workflows/release.yml` 会在以下场景自动构建：
+
+- 推送 tag：`v*`
+- 手动触发：Actions → Release → Run workflow
+
+构建目标：
+
+- macOS arm64
+- macOS x64
+- Linux x64
+- Linux arm64
+- Windows x64
+
+tag 构建完成后会自动创建 GitHub Release 并上传安装包。
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+如需 Tauri updater 签名，请在 GitHub 仓库 Secrets 中配置：
+
+- `TAURI_SIGNING_PRIVATE_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 
 ---
 
