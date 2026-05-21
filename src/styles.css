@@ -879,3 +879,157 @@ input::placeholder {
 .safe-mode-hint strong {
   color: var(--text-muted);
 }
+
+/* ─── Tab urgent state ────────────────────────────────────── */
+.tab-btn.urgent {
+  color: #f59e0b;
+  animation: urgent-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes urgent-pulse {
+  0%, 100% { color: #f59e0b; }
+  50% { color: #ff4444; }
+}
+
+/* ─── Telnet Panel ────────────────────────────────────────── */
+.telnet-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.telnet-urgent-banner {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-left: 4px solid #ef4444;
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #fca5a5;
+  font-weight: 500;
+  flex-shrink: 0;
+  animation: banner-pulse 2s ease-in-out infinite;
+}
+
+@keyframes banner-pulse {
+  0%, 100% { border-color: rgba(239,68,68,0.4); }
+  50% { border-color: rgba(239,68,68,0.8); }
+}
+
+.recovery-tag {
+  font-size: 10px;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
+  padding: 2px 7px;
+  border-radius: 10px;
+  margin-left: 8px;
+}
+
+.telnet-login {
+  max-width: 520px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.telnet-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.telnet-notice {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.telnet-notice p {
+  margin-bottom: 10px;
+}
+
+.quick-cmds {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quick-cmds-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 6px !important;
+}
+
+.quick-cmds code {
+  display: block;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-family: monospace;
+  font-size: 11px;
+  color: #a0c4ff;
+  cursor: pointer;
+}
+
+.telnet-connected {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-card);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.telnet-log {
+  background: #080a10;
+}
+
+.telnet-prompt {
+  color: #f59e0b !important;
+}
+
+/* Quick command bar */
+.quick-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-input);
+  flex-shrink: 0;
+}
+
+.quick-cmd-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: var(--radius-sm);
+  color: #d97706;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: monospace;
+  transition: all 0.12s;
+}
+
+.quick-cmd-btn:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.quick-cmd-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

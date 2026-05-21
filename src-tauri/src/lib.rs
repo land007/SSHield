@@ -1,9 +1,11 @@
 mod ssh_manager;
 mod telnet_guard;
+mod telnet_terminal;
 mod vulnerability_scanner;
 
 use ssh_manager::{AuthMethod, SessionStore, SshConnection};
 use telnet_guard::{apply_patch_with_telnet_guard, teardown_telnet, GuardedPatchResult};
+use telnet_terminal::TelnetManager;
 use vulnerability_scanner::{apply_patch, apply_ssh_upgrade, scan_system};
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +14,7 @@ use tauri::State;
 
 pub struct AppState {
     store: Arc<SessionStore>,
+    telnet: Arc<TelnetManager>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -203,6 +206,60 @@ async fn execute_command(
         .map_err(|e| e.to_string())
 }
 
+// ── Telnet terminal commands ─────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TelnetConnectRequest {
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+}
+
+#[tauri::command]
+async fn telnet_connect(
+    request: TelnetConnectRequest,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let mgr = state.telnet.clone();
+    let host = request.host.clone();
+    tokio::task::spawn_blocking(move || {
+        mgr.connect(&request.host, request.port, &request.username, &request.password)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| format!("Telnet connect to {} failed: {}", host, e))
+}
+
+#[tauri::command]
+async fn telnet_execute(
+    session_id: String,
+    command: String,
+    timeout_secs: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let mgr = state.telnet.clone();
+    let secs = timeout_secs.unwrap_or(30);
+    tokio::task::spawn_blocking(move || {
+        mgr.execute(&session_id, &command, secs)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn telnet_disconnect(session_id: String, state: State<'_, AppState>) {
+    state.telnet.disconnect(&session_id);
+}
+
+#[tauri::command]
+fn telnet_check_session(session_id: String, state: State<'_, AppState>) -> bool {
+    state.telnet.is_connected(&session_id)
+}
+
+// ── SSH terminal ─────────────────────────────────────────────
+
 #[tauri::command]
 fn check_session(session_id: String, state: State<'_, AppState>) -> bool {
     state.store.is_connected(&session_id)
@@ -214,6 +271,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             store: Arc::new(SessionStore::new()),
+            telnet: Arc::new(TelnetManager::new()),
         })
         .invoke_handler(tauri::generate_handler![
             ssh_connect,
@@ -224,6 +282,10 @@ pub fn run() {
             apply_all_patches,
             apply_all_patches_safe,
             cleanup_telnet,
+            telnet_connect,
+            telnet_execute,
+            telnet_disconnect,
+            telnet_check_session,
             execute_command,
             check_session,
         ])

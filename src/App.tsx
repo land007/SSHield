@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ConnectPanel } from "./components/ConnectPanel";
 import { ScanPanel } from "./components/ScanPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
+import { TelnetTerminalPanel } from "./components/TelnetTerminalPanel";
 import { PatchLog } from "./components/PatchLog";
 import type {
   ConnectRequest,
@@ -14,7 +15,7 @@ import type {
   Session,
 } from "./types";
 
-type Tab = "connect" | "scan" | "terminal" | "logs";
+type Tab = "connect" | "scan" | "terminal" | "telnet" | "logs";
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -108,7 +109,8 @@ export default function App() {
           await handleScan();
         } else {
           showError(result.error ?? "修补失败");
-          setActiveTab("logs");
+          // Auto-jump to telnet terminal for recovery
+          setActiveTab("telnet");
         }
         // Convert to PatchResult for the log list
         setPatchLogs(prev => [...prev, {
@@ -154,7 +156,7 @@ export default function App() {
           await handleScan();
         } else {
           showError(result.error ?? "升级失败");
-          setActiveTab("logs");
+          setActiveTab("telnet");
         }
         setPatchLogs(prev => [...prev, {
           vulnerability_id: "全量 OpenSSH 升级",
@@ -202,10 +204,19 @@ export default function App() {
     return invoke<CommandResult>("execute_command", { sessionId: session.id, command: cmd });
   };
 
-  const tabs: { id: Tab; label: string; icon: string; disabled?: boolean }[] = [
+  const telnetActive = lastGuarded?.telnet_still_active ?? false;
+
+  const tabs: { id: Tab; label: string; icon: string; disabled?: boolean; urgent?: boolean }[] = [
     { id: "connect", label: "连接", icon: "🔌" },
     { id: "scan", label: "漏洞扫描", icon: "🔍", disabled: !session },
-    { id: "terminal", label: "终端", icon: "💻", disabled: !session },
+    { id: "terminal", label: "SSH 终端", icon: "💻", disabled: !session },
+    {
+      id: "telnet",
+      label: telnetActive ? "🚨 Telnet 恢复" : "Telnet 终端",
+      icon: "📡",
+      disabled: !session,
+      urgent: telnetActive,
+    },
     { id: "logs", label: `日志${patchLogs.length > 0 ? ` (${patchLogs.length})` : ""}`, icon: "📋", disabled: patchLogs.length === 0 },
   ];
 
@@ -241,7 +252,7 @@ export default function App() {
         {tabs.map(tab => (
           <button
             key={tab.id}
-            className={`tab-btn ${activeTab === tab.id ? "active" : ""}`}
+            className={`tab-btn ${activeTab === tab.id ? "active" : ""} ${tab.urgent ? "urgent" : ""}`}
             onClick={() => setActiveTab(tab.id)}
             disabled={tab.disabled}
           >
@@ -269,6 +280,13 @@ export default function App() {
         )}
         {activeTab === "terminal" && session && (
           <TerminalPanel onExecute={handleExecute} disabled={!session} />
+        )}
+        {activeTab === "telnet" && session && (
+          <TelnetTerminalPanel
+            host={session.host}
+            port={23}
+            urgentRecovery={telnetActive}
+          />
         )}
         {activeTab === "logs" && (
           <PatchLog logs={patchLogs} />
