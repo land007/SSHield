@@ -1,7 +1,9 @@
 mod ssh_manager;
+mod telnet_guard;
 mod vulnerability_scanner;
 
 use ssh_manager::{AuthMethod, SessionStore, SshConnection};
+use telnet_guard::{apply_patch_with_telnet_guard, teardown_telnet, GuardedPatchResult};
 use vulnerability_scanner::{apply_patch, apply_ssh_upgrade, scan_system};
 
 use serde::{Deserialize, Serialize};
@@ -90,6 +92,7 @@ async fn scan_vulnerabilities(
         .map_err(|e| e.to_string())
 }
 
+/// Direct patch — no telnet guard. Use only when telnet is unavailable/unwanted.
 #[tauri::command]
 async fn apply_vulnerability_patch(
     session_id: String,
@@ -108,6 +111,73 @@ async fn apply_vulnerability_patch(
     .map_err(|e| e.to_string())
 }
 
+/// Safe patch — installs telnet fallback first, verifies sshd after, then removes telnet.
+/// If sshd verification fails, telnet is left running for manual recovery.
+#[tauri::command]
+async fn apply_vulnerability_patch_safe(
+    session_id: String,
+    vulnerability_id: String,
+    patch_command: String,
+    state: State<'_, AppState>,
+) -> Result<GuardedPatchResult, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        // Determine package manager (needed for telnet install/remove)
+        let scan = scan_system(&store, &session_id)?;
+        let pkg_mgr = scan.system_info.package_manager;
+
+        let mut result =
+            apply_patch_with_telnet_guard(&store, &session_id, &pkg_mgr, &patch_command)?;
+        result.patch_output = format!("[{}]\n{}", vulnerability_id, result.patch_output);
+        Ok::<_, anyhow::Error>(result)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| e.to_string())
+}
+
+/// Safe bulk SSH upgrade — same guard logic applied to the full openssh upgrade.
+#[tauri::command]
+async fn apply_all_patches_safe(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<GuardedPatchResult, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let scan = scan_system(&store, &session_id)?;
+        let pkg_mgr = scan.system_info.package_manager;
+        let cmd = telnet_guard::OPENSSH_UPGRADE_CMD_EXPORT;
+        apply_patch_with_telnet_guard(&store, &session_id, &pkg_mgr, cmd)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| e.to_string())
+}
+
+/// Manually remove telnet after the user has confirmed SSH is working.
+#[tauri::command]
+async fn cleanup_telnet(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let scan = scan_system(&store, &session_id)?;
+        let pkg_mgr = scan.system_info.package_manager;
+        let status = telnet_guard::TelnetStatus {
+            installed: true,
+            listening: true,
+            port: 23,
+            start_method: telnet_guard::StartMethod::SystemdSocket,
+        };
+        teardown_telnet(&store, &session_id, &pkg_mgr, &status)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| e.to_string())
+}
+
+/// Unsafe fallback: direct SSH upgrade without telnet guard.
 #[tauri::command]
 async fn apply_all_patches(
     session_id: String,
@@ -150,7 +220,10 @@ pub fn run() {
             ssh_disconnect,
             scan_vulnerabilities,
             apply_vulnerability_patch,
+            apply_vulnerability_patch_safe,
             apply_all_patches,
+            apply_all_patches_safe,
+            cleanup_telnet,
             execute_command,
             check_session,
         ])

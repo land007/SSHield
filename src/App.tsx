@@ -7,6 +7,7 @@ import { PatchLog } from "./components/PatchLog";
 import type {
   ConnectRequest,
   ConnectResponse,
+  GuardedPatchResult,
   ScanResult,
   PatchResult,
   CommandResult,
@@ -23,17 +24,18 @@ export default function App() {
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [patching, setPatching] = useState<string | null>(null);
   const [patchLogs, setPatchLogs] = useState<PatchResult[]>([]);
+  const [lastGuarded, setLastGuarded] = useState<GuardedPatchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const showError = (msg: string) => {
     setError(msg);
-    setTimeout(() => setError(null), 6000);
+    setTimeout(() => setError(null), 8000);
   };
 
   const showSuccess = (msg: string) => {
     setSuccessMsg(msg);
-    setTimeout(() => setSuccessMsg(null), 4000);
+    setTimeout(() => setSuccessMsg(null), 5000);
   };
 
   const handleConnect = async (req: ConnectRequest) => {
@@ -50,6 +52,7 @@ export default function App() {
       });
       setScanResult(null);
       setPatchLogs([]);
+      setLastGuarded(null);
       showSuccess(resp.message);
       setActiveTab("scan");
     } catch (err) {
@@ -68,6 +71,7 @@ export default function App() {
     }
     setSession(null);
     setScanResult(null);
+    setLastGuarded(null);
     setActiveTab("connect");
     showSuccess("已断开连接");
   };
@@ -77,12 +81,9 @@ export default function App() {
     setScanning(true);
     setError(null);
     try {
-      const result = await invoke<ScanResult>("scan_vulnerabilities", {
-        sessionId: session.id,
-      });
+      const result = await invoke<ScanResult>("scan_vulnerabilities", { sessionId: session.id });
       setScanResult(result);
-      const total = result.vulnerabilities.length;
-      showSuccess(`扫描完成，发现 ${total} 个安全问题`);
+      showSuccess(`扫描完成，发现 ${result.vulnerabilities.length} 个安全问题`);
     } catch (err) {
       showError(`扫描失败: ${err}`);
     } finally {
@@ -90,23 +91,46 @@ export default function App() {
     }
   };
 
-  const handlePatchOne = async (vulnId: string, cmd: string) => {
+  const handlePatchOne = async (vulnId: string, cmd: string, safe: boolean) => {
     if (!session) return;
     setPatching(vulnId);
+    setLastGuarded(null);
     try {
-      const result = await invoke<PatchResult>("apply_vulnerability_patch", {
-        sessionId: session.id,
-        vulnerabilityId: vulnId,
-        patchCommand: cmd,
-      });
-      setPatchLogs(prev => [...prev, result]);
-      if (result.success) {
-        showSuccess(`漏洞 ${vulnId} 修补成功`);
-        // Re-scan to update results
-        await handleScan();
+      if (safe) {
+        const result = await invoke<GuardedPatchResult>("apply_vulnerability_patch_safe", {
+          sessionId: session.id,
+          vulnerabilityId: vulnId,
+          patchCommand: cmd,
+        });
+        setLastGuarded(result);
+        if (result.patch_success && result.ssh_verified) {
+          showSuccess(`漏洞 ${vulnId} 修补成功，SSH 验证通过，Telnet 已移除`);
+          await handleScan();
+        } else {
+          showError(result.error ?? "修补失败");
+          setActiveTab("logs");
+        }
+        // Convert to PatchResult for the log list
+        setPatchLogs(prev => [...prev, {
+          vulnerability_id: vulnId,
+          success: result.patch_success && result.ssh_verified,
+          output: `[telnet setup]\n${result.telnet_setup_output}\n\n[patch]\n${result.patch_output}\n\n[telnet cleanup]\n${result.telnet_cleanup_output}`,
+          error: result.error,
+        }]);
       } else {
-        showError(`修补失败: ${result.error}`);
-        setActiveTab("logs");
+        const result = await invoke<PatchResult>("apply_vulnerability_patch", {
+          sessionId: session.id,
+          vulnerabilityId: vulnId,
+          patchCommand: cmd,
+        });
+        setPatchLogs(prev => [...prev, result]);
+        if (result.success) {
+          showSuccess(`漏洞 ${vulnId} 修补成功`);
+          await handleScan();
+        } else {
+          showError(`修补失败: ${result.error}`);
+          setActiveTab("logs");
+        }
       }
     } catch (err) {
       showError(`修补出错: ${err}`);
@@ -115,34 +139,67 @@ export default function App() {
     }
   };
 
-  const handlePatchAll = async () => {
+  const handlePatchAll = async (safe: boolean) => {
     if (!session) return;
     setPatching("all");
+    setLastGuarded(null);
     try {
-      const result = await invoke<PatchResult>("apply_all_patches", {
-        sessionId: session.id,
-      });
-      setPatchLogs(prev => [...prev, result]);
-      if (result.success) {
-        showSuccess("OpenSSH 升级完成");
-        await handleScan();
+      if (safe) {
+        const result = await invoke<GuardedPatchResult>("apply_all_patches_safe", {
+          sessionId: session.id,
+        });
+        setLastGuarded(result);
+        if (result.patch_success && result.ssh_verified) {
+          showSuccess("OpenSSH 安全升级完成，SSH 验证通过，Telnet 已移除");
+          await handleScan();
+        } else {
+          showError(result.error ?? "升级失败");
+          setActiveTab("logs");
+        }
+        setPatchLogs(prev => [...prev, {
+          vulnerability_id: "全量 OpenSSH 升级",
+          success: result.patch_success && result.ssh_verified,
+          output: `[telnet setup]\n${result.telnet_setup_output}\n\n[patch]\n${result.patch_output}\n\n[telnet cleanup]\n${result.telnet_cleanup_output}`,
+          error: result.error,
+        }]);
       } else {
-        showError(`全量升级失败: ${result.error}`);
-        setActiveTab("logs");
+        const result = await invoke<PatchResult>("apply_all_patches", { sessionId: session.id });
+        setPatchLogs(prev => [...prev, result]);
+        if (result.success) {
+          showSuccess("OpenSSH 升级完成");
+          await handleScan();
+        } else {
+          showError(`升级失败: ${result.error}`);
+          setActiveTab("logs");
+        }
       }
     } catch (err) {
-      showError(`全量升级出错: ${err}`);
+      showError(`升级出错: ${err}`);
     } finally {
       setPatching(null);
     }
   };
 
+  const handleCleanupTelnet = async () => {
+    if (!session) return;
+    try {
+      const output = await invoke<string>("cleanup_telnet", { sessionId: session.id });
+      setLastGuarded(null);
+      showSuccess("Telnet 已手动移除");
+      setPatchLogs(prev => [...prev, {
+        vulnerability_id: "手动移除 Telnet",
+        success: true,
+        output,
+        error: null,
+      }]);
+    } catch (err) {
+      showError(`移除 Telnet 失败: ${err}`);
+    }
+  };
+
   const handleExecute = async (cmd: string): Promise<CommandResult> => {
     if (!session) throw new Error("未连接");
-    return invoke<CommandResult>("execute_command", {
-      sessionId: session.id,
-      command: cmd,
-    });
+    return invoke<CommandResult>("execute_command", { sessionId: session.id, command: cmd });
   };
 
   const tabs: { id: Tab; label: string; icon: string; disabled?: boolean }[] = [
@@ -166,26 +223,18 @@ export default function App() {
           <div className="session-info">
             <div className="session-badge">
               <span className="conn-dot" />
-              <span className="conn-label">
-                {session.username}@{session.host}:{session.port}
-              </span>
+              <span className="conn-label">{session.username}@{session.host}:{session.port}</span>
             </div>
-            <button className="btn btn-sm btn-ghost" onClick={handleDisconnect}>
-              断开
-            </button>
+            <button className="btn btn-sm btn-ghost" onClick={handleDisconnect}>断开</button>
           </div>
         )}
       </header>
 
       {error && (
-        <div className="alert alert-error">
-          <span className="icon">⚠️</span> {error}
-        </div>
+        <div className="alert alert-error"><span className="icon">⚠️</span> {error}</div>
       )}
       {successMsg && (
-        <div className="alert alert-success">
-          <span className="icon">✅</span> {successMsg}
-        </div>
+        <div className="alert alert-success"><span className="icon">✅</span> {successMsg}</div>
       )}
 
       <nav className="tab-nav">
@@ -207,19 +256,19 @@ export default function App() {
         )}
         {activeTab === "scan" && session && (
           <ScanPanel
+            host={session.host}
             scanResult={scanResult}
             scanning={scanning}
             onScan={handleScan}
             onPatchOne={handlePatchOne}
             onPatchAll={handlePatchAll}
             patching={patching}
+            lastGuarded={lastGuarded}
+            onCleanupTelnet={handleCleanupTelnet}
           />
         )}
         {activeTab === "terminal" && session && (
-          <TerminalPanel
-            onExecute={handleExecute}
-            disabled={!session}
-          />
+          <TerminalPanel onExecute={handleExecute} disabled={!session} />
         )}
         {activeTab === "logs" && (
           <PatchLog logs={patchLogs} />

@@ -744,3 +744,138 @@ input::placeholder {
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
 .icon { user-select: none; }
+
+/* ─── Safe mode toggle ────────────────────────────────────── */
+.safe-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.safe-mode-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--success);
+}
+
+.toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 12px;
+  transition: all 0.15s;
+}
+
+.toggle-label.on {
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: var(--success);
+}
+
+.toggle-label.off {
+  background: rgba(255, 68, 68, 0.1);
+  border: 1px solid rgba(255, 68, 68, 0.25);
+  color: var(--danger);
+}
+
+/* ─── Telnet alert banner ─────────────────────────────────── */
+.telnet-alert {
+  background: rgba(255, 136, 0, 0.1);
+  border: 1px solid rgba(255, 136, 0, 0.4);
+  border-left: 4px solid #ff8800;
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.telnet-alert-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #ffaa44;
+}
+
+.telnet-alert-body {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.telnet-recovery {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #0a0c13;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.telnet-recovery code {
+  font-family: monospace;
+  font-size: 13px;
+  color: #a0c4ff;
+  font-weight: 600;
+}
+
+.telnet-recovery span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.telnet-alert-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.error-detail {
+  font-size: 11px;
+  color: #ff8844;
+  flex: 1;
+}
+
+/* ─── Unsafe warning ──────────────────────────────────────── */
+.unsafe-warning {
+  background: rgba(255, 68, 68, 0.08);
+  border: 1px solid rgba(255, 68, 68, 0.2);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #ff8888;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ─── Safe patch button ───────────────────────────────────── */
+.btn-safe {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: var(--success);
+}
+.btn-safe:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.25);
+}
+
+/* ─── Safe mode hint ──────────────────────────────────────── */
+.safe-mode-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 8px;
+}
+
+.safe-mode-hint strong {
+  color: var(--text-muted);
+}
