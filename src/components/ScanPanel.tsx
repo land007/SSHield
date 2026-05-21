@@ -57,7 +57,7 @@ export function ScanPanel({ scanResult, scanning, onScan, onPatchOne, onPatchAll
               {patching === "all" ? (
                 <><span className="spinner" /> 修补中...</>
               ) : (
-                <><span className="icon">🛡️</span> 一键修补全部 ({patchableCount})</>
+                <><span className="icon">🛡️</span> 升级 OpenSSH ({patchableCount})</>
               )}
             </button>
           )}

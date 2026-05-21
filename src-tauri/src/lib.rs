@@ -2,7 +2,7 @@ mod ssh_manager;
 mod vulnerability_scanner;
 
 use ssh_manager::{AuthMethod, SessionStore, SshConnection};
-use vulnerability_scanner::{apply_os_upgrades, apply_patch, scan_system};
+use vulnerability_scanner::{apply_patch, apply_ssh_upgrade, scan_system};
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -113,17 +113,8 @@ async fn apply_all_patches(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<vulnerability_scanner::PatchResult, String> {
-    // First get system info to determine package manager
     let store = state.store.clone();
-    let sid = session_id.clone();
-    let scan = tokio::task::spawn_blocking(move || scan_system(&store, &sid))
-        .await
-        .map_err(|e| format!("Task error: {}", e))?
-        .map_err(|e| e.to_string())?;
-
-    let store = state.store.clone();
-    let pkg_mgr = scan.system_info.package_manager;
-    tokio::task::spawn_blocking(move || apply_os_upgrades(&store, &session_id, &pkg_mgr))
+    tokio::task::spawn_blocking(move || apply_ssh_upgrade(&store, &session_id))
         .await
         .map_err(|e| format!("Task error: {}", e))?
         .map_err(|e| e.to_string())

@@ -124,7 +124,7 @@ export default function App() {
       });
       setPatchLogs(prev => [...prev, result]);
       if (result.success) {
-        showSuccess("全量安全升级完成");
+        showSuccess("OpenSSH 升级完成");
         await handleScan();
       } else {
         showError(`全量升级失败: ${result.error}`);
