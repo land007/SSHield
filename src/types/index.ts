@@ -61,18 +61,6 @@ export interface CommandResult {
   exit_code: number;
 }
 
-export interface GuardedPatchResult {
-  telnet_setup_output: string;
-  telnet_port: number;
-  patch_output: string;
-  patch_success: boolean;
-  ssh_verified: boolean;
-  telnet_removed: boolean;
-  telnet_cleanup_output: string;
-  error: string | null;
-  /** true = telnet still running, user can connect via telnet <host> 23 */
-  telnet_still_active: boolean;
-}
 
 export interface Session {
   id: string;

@@ -1,16 +1,17 @@
 import { useState } from "react";
-import type { GuardedPatchResult, ScanResult, Severity, Vulnerability } from "../types";
+import type { ScanResult, Severity, Vulnerability } from "../types";
+import { GuidedPatchWizard } from "./GuidedPatchWizard";
 
 interface Props {
-  host: string;
+  sessionId: string;
   scanResult: ScanResult | null;
   scanning: boolean;
   onScan: () => void;
-  onPatchOne: (vulnId: string, cmd: string, safe: boolean) => void;
-  onPatchAll: (safe: boolean) => void;
+  onPatchDirect: (vulnId: string, cmd: string) => void;
+  onPatchAll: () => void;
   patching: string | null;
-  lastGuarded: GuardedPatchResult | null;
-  onCleanupTelnet: () => void;
+  onGoTelnet: () => void;
+  onRescan: () => void;
 }
 
 const SEVERITY_COLORS: Record<Severity, string> = {
@@ -20,100 +21,48 @@ const SEVERITY_COLORS: Record<Severity, string> = {
   low: "#44aaff",
   info: "#888",
 };
-
 const SEVERITY_LABELS: Record<Severity, string> = {
-  critical: "严重",
-  high: "高危",
-  medium: "中危",
-  low: "低危",
-  info: "信息",
+  critical: "严重", high: "高危", medium: "中危", low: "低危", info: "信息",
 };
-
 const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low", "info"];
 
 export function ScanPanel({
-  host,
-  scanResult,
-  scanning,
-  onScan,
-  onPatchOne,
-  onPatchAll,
-  patching,
-  lastGuarded,
-  onCleanupTelnet,
+  sessionId, scanResult, scanning, onScan,
+  onPatchDirect, onPatchAll, patching, onGoTelnet, onRescan,
 }: Props) {
-  const [safeMode, setSafeMode] = useState(true);
+  const [wizardVuln, setWizardVuln] = useState<Vulnerability | null>(null);
   const patchableCount = scanResult?.vulnerabilities.filter(v => v.patchable).length ?? 0;
 
   return (
     <div className="scan-panel">
+      {/* Wizard overlay */}
+      {wizardVuln && (
+        <GuidedPatchWizard
+          sessionId={sessionId}
+          vuln={wizardVuln}
+          onClose={() => setWizardVuln(null)}
+          onGoTelnet={() => { setWizardVuln(null); onGoTelnet(); }}
+          onRescan={onRescan}
+        />
+      )}
+
       <div className="scan-header">
         <h2 className="panel-title">
           <span className="icon">🔍</span> 漏洞扫描
         </h2>
         <div className="scan-actions">
-          <label className="safe-mode-toggle" title="安全模式：修补前先安装 telnet，验证 SSH 正常后再删除，防止掉线">
-            <input
-              type="checkbox"
-              checked={safeMode}
-              onChange={e => setSafeMode(e.target.checked)}
-            />
-            <span className={`toggle-label ${safeMode ? "on" : "off"}`}>
-              🛡️ 安全模式（Telnet 回退）
-            </span>
-          </label>
-          <button
-            className="btn btn-secondary"
-            onClick={onScan}
-            disabled={scanning}
-          >
+          <button className="btn btn-secondary" onClick={onScan} disabled={scanning}>
             {scanning ? <><span className="spinner" /> 扫描中...</> : <><span className="icon">🔍</span> 开始扫描</>}
           </button>
           {patchableCount > 0 && (
-            <button
-              className="btn btn-danger"
-              onClick={() => onPatchAll(safeMode)}
-              disabled={patching !== null}
-            >
-              {patching === "all" ? (
-                <><span className="spinner" /> {safeMode ? "安全升级中..." : "升级中..."}</>
-              ) : (
-                <><span className="icon">🛡️</span> 升级 OpenSSH ({patchableCount}){safeMode ? " [安全]" : ""}</>
-              )}
+            <button className="btn btn-danger" onClick={onPatchAll} disabled={patching !== null}>
+              {patching === "all"
+                ? <><span className="spinner" /> 升级中...</>
+                : <><span className="icon">⬆️</span> 升级 OpenSSH ({patchableCount})</>}
             </button>
           )}
         </div>
       </div>
-
-      {/* Telnet fallback status banner */}
-      {lastGuarded?.telnet_still_active && (
-        <div className="telnet-alert">
-          <div className="telnet-alert-header">
-            <span className="icon">⚠️</span>
-            <strong>SSH 验证失败 — Telnet 回退通道仍在运行</strong>
-          </div>
-          <p className="telnet-alert-body">
-            修补后 sshd 验证未通过，为防止您被锁定，<strong>telnet 仍监听在端口 23</strong>。
-          </p>
-          <div className="telnet-recovery">
-            <code>telnet {host} 23</code>
-            <span> → 登录后排查 sshd 问题</span>
-          </div>
-          <div className="telnet-alert-footer">
-            <span className="error-detail">{lastGuarded.error}</span>
-            <button className="btn btn-sm btn-ghost" onClick={onCleanupTelnet}>
-              SSH 已恢复，手动移除 Telnet
-            </button>
-          </div>
-        </div>
-      )}
-
-      {!safeMode && (
-        <div className="unsafe-warning">
-          <span className="icon">⚡</span>
-          <strong>警告：</strong>已关闭安全模式。修补过程中若 SSH 中断将无法自动恢复，建议保持开启。
-        </div>
-      )}
 
       {scanResult && (
         <>
@@ -165,10 +114,10 @@ export function ScanPanel({
                   <VulnCard
                     key={vuln.id}
                     vuln={vuln}
-                    safeMode={safeMode}
-                    onPatch={onPatchOne}
                     patching={patching === vuln.id}
                     disabled={patching !== null}
+                    onGuided={() => setWizardVuln(vuln)}
+                    onDirect={() => vuln.patch_command && onPatchDirect(vuln.id, vuln.patch_command)}
                   />
                 ))}
             </div>
@@ -180,30 +129,18 @@ export function ScanPanel({
         <div className="scan-placeholder">
           <span className="icon large-icon">🛡️</span>
           <p>点击「开始扫描」检测远程主机的 SSH 漏洞和安全配置问题</p>
-          <p className="safe-mode-hint">
-            安全模式已<strong>{safeMode ? "开启" : "关闭"}</strong>：
-            {safeMode
-              ? "修补前会自动安装 telnet 回退通道，验证 SSH 正常后移除"
-              : "直接修补，无回退保护"}
-          </p>
         </div>
       )}
     </div>
   );
 }
 
-function VulnCard({
-  vuln,
-  safeMode,
-  onPatch,
-  patching,
-  disabled,
-}: {
+function VulnCard({ vuln, patching, disabled, onGuided, onDirect }: {
   vuln: Vulnerability;
-  safeMode: boolean;
-  onPatch: (id: string, cmd: string, safe: boolean) => void;
   patching: boolean;
   disabled: boolean;
+  onGuided: () => void;
+  onDirect: () => void;
 }) {
   return (
     <div className={`vuln-card severity-${vuln.severity}`}>
@@ -237,26 +174,43 @@ function VulnCard({
         </div>
       )}
 
-      {vuln.patchable && vuln.patch_command && (
+      {vuln.patchable && (
         <div className="vuln-actions">
-          <code className="patch-cmd">{vuln.patch_command.split(";")[0].trim()}...</code>
-          <button
-            className={`btn btn-sm ${safeMode ? "btn-safe" : "btn-danger"}`}
-            onClick={() => onPatch(vuln.id, vuln.patch_command!, safeMode)}
-            disabled={disabled}
-          >
-            {patching ? (
-              <><span className="spinner" /> {safeMode ? "安全修补中..." : "修补中..."}</>
-            ) : (
-              safeMode ? "🛡️ 安全修补" : "⚡ 直接修补"
+          {vuln.patch_command && (
+            <code className="patch-cmd">
+              {vuln.patch_command.split(";")[0].trim()}...
+            </code>
+          )}
+          <div className="vuln-btn-group">
+            <button
+              className="btn btn-sm btn-safe"
+              onClick={onGuided}
+              disabled={disabled}
+              title="分步引导：先装 Telnet → 补丁 → 验证 SSH → 移除 Telnet"
+            >
+              🛡️ 引导修补
+            </button>
+            {vuln.patch_command && (
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={onDirect}
+                disabled={disabled || patching}
+                title="直接执行补丁命令，无 Telnet 保护"
+              >
+                {patching ? <><span className="spinner" /> 执行中...</> : "⚡ 直接修补"}
+              </button>
             )}
-          </button>
+          </div>
         </div>
       )}
 
       {vuln.patchable && !vuln.patch_command && (
-        <div className="vuln-hint">
-          <span className="icon">💡</span> 可通过「升级 OpenSSH」按钮处理
+        <div className="vuln-actions">
+          <div className="vuln-btn-group">
+            <button className="btn btn-sm btn-safe" onClick={onGuided} disabled={disabled}>
+              🛡️ 引导修补
+            </button>
+          </div>
         </div>
       )}
     </div>

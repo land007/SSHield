@@ -4,9 +4,9 @@ mod telnet_terminal;
 mod vulnerability_scanner;
 
 use ssh_manager::{AuthMethod, SessionStore, SshConnection};
-use telnet_guard::{apply_patch_with_telnet_guard, teardown_telnet, GuardedPatchResult};
+use telnet_guard::{check_port_listening, setup_telnet, teardown_telnet, verify_sshd};
 use telnet_terminal::TelnetManager;
-use vulnerability_scanner::{apply_patch, apply_ssh_upgrade, scan_system};
+use vulnerability_scanner::{apply_patch, apply_ssh_upgrade, scan_system, PackageManager};
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -34,22 +34,21 @@ pub struct ConnectResponse {
     message: String,
 }
 
+// ── SSH connection ────────────────────────────────────────────
+
 #[tauri::command]
 async fn ssh_connect(
     request: ConnectRequest,
     state: State<'_, AppState>,
 ) -> Result<ConnectResponse, String> {
     let auth_method = match request.auth_type.as_str() {
-        "password" => AuthMethod::Password {
-            password: request.password.unwrap_or_default(),
-        },
+        "password" => AuthMethod::Password { password: request.password.unwrap_or_default() },
         "key" => AuthMethod::PrivateKey {
             key_path: request.key_path.unwrap_or_default(),
             passphrase: request.key_passphrase,
         },
         _ => return Err("Invalid auth type".to_string()),
     };
-
     let conn = SshConnection {
         id: String::new(),
         host: request.host.clone(),
@@ -58,30 +57,25 @@ async fn ssh_connect(
         auth_method,
         connected: false,
     };
-
     let store = state.store.clone();
     let session_id = tokio::task::spawn_blocking(move || store.connect(&conn))
-        .await
-        .map_err(|e| format!("Task error: {}", e))?
-        .map_err(|e| e.to_string())?;
-
-    Ok(ConnectResponse {
-        session_id,
-        message: format!("Connected to {}", request.host),
-    })
+        .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())?;
+    Ok(ConnectResponse { session_id, message: format!("Connected to {}", request.host) })
 }
 
 #[tauri::command]
-async fn ssh_disconnect(
-    session_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+async fn ssh_disconnect(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || store.disconnect(&session_id))
-        .await
-        .map_err(|e| format!("Task error: {}", e))?
-        .map_err(|e| e.to_string())
+        .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+fn check_session(session_id: String, state: State<'_, AppState>) -> bool {
+    state.store.is_connected(&session_id)
+}
+
+// ── Vulnerability scanning ────────────────────────────────────
 
 #[tauri::command]
 async fn scan_vulnerabilities(
@@ -90,12 +84,12 @@ async fn scan_vulnerabilities(
 ) -> Result<vulnerability_scanner::ScanResult, String> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || scan_system(&store, &session_id))
-        .await
-        .map_err(|e| format!("Task error: {}", e))?
-        .map_err(|e| e.to_string())
+        .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
 }
 
-/// Direct patch — no telnet guard. Use only when telnet is unavailable/unwanted.
+// ── Patching ──────────────────────────────────────────────────
+
+/// Run the given patch command directly (no guard).
 #[tauri::command]
 async fn apply_vulnerability_patch(
     session_id: String,
@@ -105,82 +99,14 @@ async fn apply_vulnerability_patch(
 ) -> Result<vulnerability_scanner::PatchResult, String> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        let mut result = apply_patch(&store, &session_id, &patch_command)?;
-        result.vulnerability_id = vulnerability_id;
-        Ok::<_, anyhow::Error>(result)
+        let mut r = apply_patch(&store, &session_id, &patch_command)?;
+        r.vulnerability_id = vulnerability_id;
+        Ok::<_, anyhow::Error>(r)
     })
-    .await
-    .map_err(|e| format!("Task error: {}", e))?
-    .map_err(|e| e.to_string())
+    .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
 }
 
-/// Safe patch — installs telnet fallback first, verifies sshd after, then removes telnet.
-/// If sshd verification fails, telnet is left running for manual recovery.
-#[tauri::command]
-async fn apply_vulnerability_patch_safe(
-    session_id: String,
-    vulnerability_id: String,
-    patch_command: String,
-    state: State<'_, AppState>,
-) -> Result<GuardedPatchResult, String> {
-    let store = state.store.clone();
-    tokio::task::spawn_blocking(move || {
-        // Determine package manager (needed for telnet install/remove)
-        let scan = scan_system(&store, &session_id)?;
-        let pkg_mgr = scan.system_info.package_manager;
-
-        let mut result =
-            apply_patch_with_telnet_guard(&store, &session_id, &pkg_mgr, &patch_command)?;
-        result.patch_output = format!("[{}]\n{}", vulnerability_id, result.patch_output);
-        Ok::<_, anyhow::Error>(result)
-    })
-    .await
-    .map_err(|e| format!("Task error: {}", e))?
-    .map_err(|e| e.to_string())
-}
-
-/// Safe bulk SSH upgrade — same guard logic applied to the full openssh upgrade.
-#[tauri::command]
-async fn apply_all_patches_safe(
-    session_id: String,
-    state: State<'_, AppState>,
-) -> Result<GuardedPatchResult, String> {
-    let store = state.store.clone();
-    tokio::task::spawn_blocking(move || {
-        let scan = scan_system(&store, &session_id)?;
-        let pkg_mgr = scan.system_info.package_manager;
-        let cmd = telnet_guard::OPENSSH_UPGRADE_CMD_EXPORT;
-        apply_patch_with_telnet_guard(&store, &session_id, &pkg_mgr, cmd)
-    })
-    .await
-    .map_err(|e| format!("Task error: {}", e))?
-    .map_err(|e| e.to_string())
-}
-
-/// Manually remove telnet after the user has confirmed SSH is working.
-#[tauri::command]
-async fn cleanup_telnet(
-    session_id: String,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let store = state.store.clone();
-    tokio::task::spawn_blocking(move || {
-        let scan = scan_system(&store, &session_id)?;
-        let pkg_mgr = scan.system_info.package_manager;
-        let status = telnet_guard::TelnetStatus {
-            installed: true,
-            listening: true,
-            port: 23,
-            start_method: telnet_guard::StartMethod::SystemdSocket,
-        };
-        teardown_telnet(&store, &session_id, &pkg_mgr, &status)
-    })
-    .await
-    .map_err(|e| format!("Task error: {}", e))?
-    .map_err(|e| e.to_string())
-}
-
-/// Unsafe fallback: direct SSH upgrade without telnet guard.
+/// Upgrade only openssh-server / openssh-client.
 #[tauri::command]
 async fn apply_all_patches(
     session_id: String,
@@ -188,10 +114,76 @@ async fn apply_all_patches(
 ) -> Result<vulnerability_scanner::PatchResult, String> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || apply_ssh_upgrade(&store, &session_id))
-        .await
-        .map_err(|e| format!("Task error: {}", e))?
-        .map_err(|e| e.to_string())
+        .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
 }
+
+// ── Telnet guard — individual steps ──────────────────────────
+
+fn detect_pkg_mgr(store: &SessionStore, session_id: &str) -> PackageManager {
+    let r = store.execute(session_id,
+        "which apt-get >/dev/null 2>&1 && echo apt || which dnf >/dev/null 2>&1 && echo dnf || which yum >/dev/null 2>&1 && echo yum || which pacman >/dev/null 2>&1 && echo pacman || echo unknown"
+    ).unwrap_or_else(|_| ssh_manager::CommandResult { stdout: "unknown".into(), stderr: String::new(), exit_code: 1 });
+
+    match r.stdout.lines()
+        .find(|l| ["apt","dnf","yum","pacman","unknown"].contains(&l.trim()))
+        .unwrap_or("unknown")
+    {
+        "apt" => PackageManager::Apt,
+        "dnf" => PackageManager::Dnf,
+        "yum" => PackageManager::Yum,
+        "pacman" => PackageManager::Pacman,
+        _ => PackageManager::Unknown,
+    }
+}
+
+/// Step 1 — install telnetd and attempt to start it.
+#[tauri::command]
+async fn step_setup_telnet(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let pkg = detect_pkg_mgr(&store, &session_id);
+        setup_telnet(&store, &session_id, &pkg)
+    })
+    .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
+}
+
+/// Step 2 — check whether port 23 is currently listening.
+#[tauri::command]
+async fn step_check_telnet_port(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(bool, String), String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || check_port_listening(&store, &session_id))
+        .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
+}
+
+/// Step 4 — verify sshd is healthy after patching.
+#[tauri::command]
+async fn step_verify_ssh(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(bool, String), String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || verify_sshd(&store, &session_id))
+        .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
+}
+
+/// Step 5 — stop and remove telnetd.
+#[tauri::command]
+async fn step_remove_telnet(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || teardown_telnet(&store, &session_id))
+        .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
+}
+
+// ── SSH terminal (arbitrary command execution) ────────────────
 
 #[tauri::command]
 async fn execute_command(
@@ -201,12 +193,10 @@ async fn execute_command(
 ) -> Result<ssh_manager::CommandResult, String> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || store.execute(&session_id, &command))
-        .await
-        .map_err(|e| format!("Task error: {}", e))?
-        .map_err(|e| e.to_string())
+        .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
 }
 
-// ── Telnet terminal commands ─────────────────────────────────
+// ── Telnet terminal ───────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TelnetConnectRequest {
@@ -226,9 +216,8 @@ async fn telnet_connect(
     tokio::task::spawn_blocking(move || {
         mgr.connect(&request.host, request.port, &request.username, &request.password)
     })
-    .await
-    .map_err(|e| format!("Task error: {}", e))?
-    .map_err(|e| format!("Telnet connect to {} failed: {}", host, e))
+    .await.map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| format!("Telnet 连接 {} 失败: {}", host, e))
 }
 
 #[tauri::command]
@@ -239,13 +228,10 @@ async fn telnet_execute(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let mgr = state.telnet.clone();
-    let secs = timeout_secs.unwrap_or(30);
     tokio::task::spawn_blocking(move || {
-        mgr.execute(&session_id, &command, secs)
+        mgr.execute(&session_id, &command, timeout_secs.unwrap_or(30))
     })
-    .await
-    .map_err(|e| format!("Task error: {}", e))?
-    .map_err(|e| e.to_string())
+    .await.map_err(|e| format!("Task error: {}", e))?.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -258,12 +244,7 @@ fn telnet_check_session(session_id: String, state: State<'_, AppState>) -> bool 
     state.telnet.is_connected(&session_id)
 }
 
-// ── SSH terminal ─────────────────────────────────────────────
-
-#[tauri::command]
-fn check_session(session_id: String, state: State<'_, AppState>) -> bool {
-    state.store.is_connected(&session_id)
-}
+// ── App entry ─────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -276,18 +257,19 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ssh_connect,
             ssh_disconnect,
+            check_session,
             scan_vulnerabilities,
             apply_vulnerability_patch,
-            apply_vulnerability_patch_safe,
             apply_all_patches,
-            apply_all_patches_safe,
-            cleanup_telnet,
+            step_setup_telnet,
+            step_check_telnet_port,
+            step_verify_ssh,
+            step_remove_telnet,
+            execute_command,
             telnet_connect,
             telnet_execute,
             telnet_disconnect,
             telnet_check_session,
-            execute_command,
-            check_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
